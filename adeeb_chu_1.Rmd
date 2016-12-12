@@ -24,6 +24,7 @@ pacman::p_load(fields, plotrix, dplyr,plyr, glmnet,caret)
 
 # Introduction
 
+im
 In this module, our goal is to predict whether or not a particular shot is made in a basketball game given information about the conditions under which the shot was made. We have a variety of information we can use to make these predictions, including data on the shooter, shot location, and defender etc. 
 
 Our evaluation metric is the logarithm of the likelihood function for a Bernouli random distribution. This error metric is used where contestants have to predict that something is true or false with a probability (likelihood) ranging from definitely true (1) to equally true (0.5) to definitely false(0).
