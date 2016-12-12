@@ -1,0 +1,362 @@
+---
+title: "NBA baskets made"
+author: "Abe Adeeb(301056620)"
+date: "November 01, 2016"
+output: 
+html_document:
+      toc: yes
+      toc_float: yes
+      toc_depth: 4
+      collapsed: FALSE
+      smooth_scroll: false
+---
+
+
+\n
+\n
+
+---------------------------------------------------------------------------------------
+
+# Introduction
+In this module, our goal is to predict whether or not a particular shot is made. 
+We have a variety of information we can use to make these predictions, including
+data on the shooter, shot location, and defender. 
+
+```{r setup, include=FALSE}
+pacman::p_load(fields, plotrix, dplyr, plyr, glmnet,ggplot2, moments, mice,
+              VIM ,corrplot,car,caret,RColorBrewer,
+              glmnet, randomForest,xgboost,data.table ,Matrix,xgboost,
+              tidyverse,pROC,dummies,Metrics,kernlab,mlbench,
+              Hmisc,  xtable, knitr, forcats, BMA)
+```
+
+```{r eval_metric, include = F}
+eval_metric <- function(response, predicted_probs) {
+  N <- length(response)
+  logloss <- -(1/N) * sum(response * log(predicted_probs) + (1-response) * log(1 - predicted_probs))
+  logloss
+}
+
+# Function that converts factor to numeric variable
+fac_to_num <- function(fac) {
+  as.numeric(as.character(fac))
+}
+```
+
+### Load in data
+
+* Training data contains 444109 rows/observations with 29 variables
+
+* Testing data contains 165587 rows/observations with 29 variables
+
+
+###Data fields
+
+The variables included in train.csv and test.csv are:
+
+**Variable -	Description**
+
+* id	- shot ID
+
+* season	- year in which the regular season ends (i.e., 2014 for the 2013-14 season)
+
+* game	- game ID of the form (year month day home_team_id)
+
+* quarter	- quarter of the game
+
+* team	- shooter's team
+
+* opponent	- shooter's opponent's team
+
+* home	- indicator with a 1 if the shooter is playing at home
+
+* offense_basket	- indicates whether the shooter is shooting at the basket on the left or right side of the court
+
+* passer	- player_id of the player who passed the ball to the shooter
+
+* pass_x	- x coordinate of the passer location
+
+* pass_y	- y coordinate of the passer location
+
+* pass_distance	- length of the pass to the shooter
+
+* pass_shot_clock	- value of the shot clock when the ball was passed, counting backwards in seconds from 24
+
+* pass_game_clock	- value of the game clock when the ball was passed, counting backwards in minutes from 720 at the top of the quarter to 0 at the bottom
+* shooter	- player_id of the player who shot the ball
+
+* poss_x	- x coordinate of the location where the shooter gained possession of the ball
+
+* poss_y	- y coordinate of the location where the shooter gained possession of the ball
+
+* poss_shot_clock	- value of the shot clock when the shooter gained possession of the ball, counting backwards in seconds from 24
+
+* poss_game_clock	- value of the game clock when the shooter gained possession of the ball, counting backwards in minutes from 720 at the top of the quarter to 0 at the bottom
+
+* shot_x	- x coordinate of the location where the shot was taken
+
+* shot_y	- y coordinate of the location where the shot was taken
+
+* shot_shot_clock	- value of the shot clock when the shot was taken, counting backwards in seconds from 24
+
+* shot_game_clock	- value of the game clock when the shot was taken, counting backwards in minutes from 720 at the top of the quarter to 0 at the bottom
+
+* dribbles	- number of dribbles between the shooter gaining possession of the ball and taking the shot
+
+* distance_travelled	- distance in feet travelled by the shooter after gaining possession of the ball
+
+* defender	- player_id for the nearest defender when the shot was taken
+
+* ndd	- nearest defender distance in feet
+
+* made	- indicator with a 1 representing a made shot and 0 a missed shot
+
+\n
+\n
+
+---------------------------------------------------------------------------------------
+
+```{r load_data, include = FALSE}
+train <- read.csv("./data/train.csv")
+test <- read.csv("./data/test.csv")
+players <- read.csv("./data/players.csv")
+```
+
+
+
+
+```{r plot_court_function, include = F}
+## draw the basketball court 
+draw.court = function() {
+  rect(0, 0, 94, 50)
+  circle = function(x, y, r, from = 0, to = 2 * pi, lines = FALSE, ...) {
+    theta = seq(from, to, length = 100)
+    if (lines)
+      lines(x + r * cos(theta), y + r * sin(theta), ...)
+    else polygon(x + r * cos(theta), y + r * sin(theta), ...)
+  }
+  points(c(5.25, 94 - 5.25), c(25, 25), cex = 2)
+  segments(47, 0, 47, 50)
+  circle(47, 25, 8)
+           circle(47, 25, 2, col = "lightgray")
+         theta1 = acos((25 - 35/12)/23.75)
+         circle(5.25, 25, 23.75, -pi/2 + theta1, pi/2 - theta1, TRUE)
+         circle(94 - 5.25, 25, 23.75, pi/2 + theta1, 3 * pi/2 - theta1, TRUE)
+         segments(0, 35/12, 5.25 + 23.75 * sin(theta1), 35/12)
+         segments(0, 50 - 35/12, 5.25 + 23.75 * sin(theta1), 50 - 35/12)
+         segments(94, 35/12, 94 - 5.25 - 23.75 * sin(theta1), 35/12)
+         segments(94, 50 - 35/12, 94 - 5.25 - 23.75 * sin(theta1), 50 - 35/12)
+         circle(19, 25, 6, -pi/2, pi/2, TRUE)
+         circle(19, 25, 6, pi/2, 3 * pi/2, TRUE, lty = 2)
+         circle(94 - 19, 25, 6, pi/2, 3 * pi/2, TRUE)
+         circle(94 - 19, 25, 6, -pi/2, pi/2, TRUE, lty = 2)
+         circle(5.25, 25, 4, -pi/2, pi/2, TRUE)
+         circle(94 - 5.25, 25, 4, pi/2, 3 * pi/2, TRUE)
+         rect(0, 17, 19, 33, border = "gray")
+         rect(94, 17, 94 - 19, 33, border = "gray")
+}
+
+# Function that plots the court
+plot_court <- function(main) {
+  plot(0,0,pch=46,xlim=c(0,94), ylim=c(0,50), main=main, xlab = '', ylab = '')
+  draw.court()
+}
+```
+
+```{r best_shooters, echo = F}
+# We want to plot information for the best shooters, but filter out those
+# who have fewer than 500 attempted field goals
+shot_count <- plyr::count(train, vars = "shooter")
+fg_percentage <- tapply(train$made, train$shooter, FUN = mean)
+
+# Make sure shot count is aligned with fg_percentage
+# all.equal(as.numeric(names(fg_percentage)), shot_count[, 1])
+fg_percentage <- fg_percentage[shot_count[, 2] > 1000]
+
+best_shooter_id <- names(which.max(fg_percentage))
+# We can see that the best_shooter_id is associated with Kevin Durant
+# players[players$player_id == best_shooter_id, ]
+```
+
+# Exploratory Data Analysis
+We want to create a shot chart for the best shooter in our data set who has
+taken at least 1000 shots. This removes `r sum(shot_count[, 2] < 1000)` shooters
+from our original pool of `r nrow(shot_count)`, leaving us with just 
+`r sum(shot_count[, 2] > 1000)` to choose from. From this pool, the player with
+the highest field goal percentage in our data set is Kevin Durant. 
+
+```{r kd_shot_chart, echo = F}
+kevin_durant_df <- train[train$shooter == best_shooter_id, ]
+kd_made_shots <- kevin_durant_df[kevin_durant_df$made == 1, ]
+kd_missed_shots <- kevin_durant_df[kevin_durant_df$made == 0, ]
+
+plot_court("Kevin Durant Shotchart")
+points(kd_missed_shots$shot_x, kd_missed_shots$shot_y, pch = 1,
+       col = rgb(49, 54, 149, maxColorValue = 255))
+points(kd_made_shots$shot_x, kd_made_shots$shot_y, pch = 4, 
+       col = rgb(165, 0, 38,  maxColorValue = 255))
+```
+
+```{r calc_dist, include = F}
+# X,Y coordinates for the basketball hoops
+left_hoop_xy <- cbind(5.25, 25)
+right_hoop_xy <- cbind(88.75, 25)
+
+# Function to calculate distance between shot location and hoop
+calc_shot_dist <- function(shot_data) {
+  n <- nrow(shot_data)
+  left_shot_ind <- shot_data$offense_basket == "L"
+  right_shot_ind <- shot_data$offense_basket == "R"
+  shot_dist <- numeric(n)
+  shot_dist[left_shot_ind] <- 
+    rdist(shot_data[left_shot_ind, c("shot_x", "shot_y")], left_hoop_xy)
+  shot_dist[right_shot_ind] <- 
+    rdist(shot_data[right_shot_ind, c("shot_x", "shot_y")], right_hoop_xy)
+  shot_dist
+}
+```
+
+# Model
+
+We expect the distance from the hoop to have an effect on whether or not the shot was made, so we calculate the Euclidean distance between the shot location and the hoop and use that as a covariate in a logistic regression model to predict shot success. I also included the shooter ID as a factor to interact with shot distance. Log of the nearest defender distance interacting with the defender ID
+
+```{r fit_model}
+# Fit model using only shot distance as predictor
+# Need to add some sort of cross validation
+train <- read.csv("./data/train.csv")
+#remove rows which have NA in the ndd column
+train<-train[-which(is.na(train$ndd)),]
+count(is.na(train$ndd))
+#new dimension of train
+dim(train)
+
+#turn shooter and defender ID's into factors
+train$shooter<-factor(train$shooter)
+test$shooter<-factor(test$shooter)
+train$defender<-factor(train$defender)
+test$defender<-factor(test$defender)
+
+#calculate shot distance
+train$shot_dist <- calc_shot_dist(train)
+
+#make sure the levels are equal among the test and training set for shooter and defender
+levels(test$shooter) <- union(levels(test$shooter), levels(train$shooter))  
+levels(train$shooter) <- union(levels(test$shooter), levels(train$shooter))
+levels(test$defender) <- union(levels(test$defender), levels(train$defender))  
+levels(train$defender) <- union(levels(test$defender), levels(train$defender))
+#check if levels are equal
+all.equal(levels(test$shooter),levels(train$shooter))
+all.equal(levels(test$defender),levels(train$defender))
+#fit the models
+y <- train$made
+length(y)
+X1 <- sparse.model.matrix(~ shot_dist*shooter + log(ndd+1)*defender, data = train)
+dim(X1)
+#X2 <- sparse.model.matrix(~ shot_dist, data = train)
+fit_glm1 <- glmnet(X1, y, family = "binomial")
+#fit_glm2 <- glmnet(X2, y, family = "binomial")
+
+
+#in the testing set if ndd is NA turn it into the median ndd
+test$ndd[is.na(test$ndd)]= 4.457
+count(is.na(test$ndd))
+# Make predictions
+test$shot_dist <- calc_shot_dist(test)
+#subset the test data between where shooters exist in both training and testing
+which(!(test$shooter %in% train$shooter))
+#test1<-test[which((test$shooter %in% train$shooter)),]
+#test2<-test[which(!(test$shooter %in% train$shooter)),]
+y_test <- test$made
+#y_test2 <- test2$made
+
+X_test <- sparse.model.matrix(~shot_dist*shooter+log(ndd+1)*defender, data = test)
+#X_test2 <- sparse.model.matrix(~shot_dist, data = test2)
+summary(test$ndd)
+cv <- cv.glmnet(X1, y)
+pfit <- predict(fit_glm1, X_test, s=cv$lambda.1se , type = "response")
+
+hist(pfit)
+summary(pfit)
+
+
+#pfit2 <- predict(fit_glm2, X_test2, type = "response")
+
+#dim(pfit2)
+
+#pfit.total<-rbind(cbind(test1$id, pfit), cbind(test2$id, pfit2))
+
+null_model<-mean(train$made)
+pfit[is.na(pfit)]<-null_model
+
+#OLD WORK
+# test <- read.csv("./data/test.csv")
+# str(train.players$shooter)
+# train.players$shooter<-as.factor(train.players$shooter)
+# test$shooter<-as.factor(test$shooter)
+# avg.mean.player<- aggregate(train.players$made, list(train.players$shooter), mean, na.rm=TRUE)
+# colnames(avg.mean.player)[1]="shooter"
+# colnames(avg.mean.player)[2]="shoot.perc"
+# is.na(avg.mean.player)
+# test<-merge(x=test,y= avg.mean.player, by.x="shooter", by.y="shooter", all.x=TRUE)
+# 
+# str(test)
+# summary(test$shoot.perc)
+# test$shoot.perc[is.na(test$shoot.perc)]<-null_model
+# test$shoot.perc[test$shoot.perc<0.30]= 0.30
+# test$shoot.perc[test$shoot.perc>0.85]= 0.85
+# 
+# length(test$id)
+# dim(pfit.total)
+# Create file for submission
+
+
+submission_matrix <- data.frame(test$id, pfit)
+names(submission_matrix) = c('id', 'made')
+
+# Write submission file
+write.csv(submission_matrix, file='submission_file.csv', row.names = FALSE)
+```
+
+\n
+\n
+
+---------------------------------------------------------------------------------------
+
+
+## Validation
+
+
+Now, let's validate our model using the K-Fold Cross-validation method.\n
+
+
+**Definition:**
+
+* Cross-validation, sometimes called rotation estimation,is a model validation technique for assessing how the results of a statistical analysis will generalize to an independent data set. It is mainly used in settings where the goal is prediction, and one wants to estimate how accurately a predictive model will perform in practice. In a prediction problem, a model is usually given a dataset of known data on which training is run (training dataset), and a dataset of unknown data (or first seen data) against which the model is tested (testing dataset). The goal of cross validation is to define a dataset to "test" the model in the training phase (i.e., the validation dataset), in order to limit problems like overfitting, give an insight on how the model will generalize to an independent dataset.\n
+
+
+* In k-fold cross-validation, the original sample is randomly partitioned into k equal sized subsamples. Of the k subsamples, a single subsample is retained as the validation data for testing the model, and the remaining k − 1 subsamples are used as training data. The cross-validation process is then repeated k times (the folds), with each of the k subsamples used exactly once as the validation data. The k results from the folds can then be averaged to produce a single estimation. The advantage of this method over repeated random sub-sampling (see below) is that all observations are used for both training and validation, and each observation is used for validation exactly once. 10-fold cross-validation is commonly used, but in general k remains an unfixed parameter.
+
+* When k = n (the number of observations), the k-fold cross-validation is exactly the leave-one-out cross-validation.
+
+* In stratified k-fold cross-validation, the folds are selected so that the mean response value is approximately equal in all the folds. In the case of a dichotomous classification, this means that each fold contains roughly the same proportions of the two types of class labels.
+
+
+
+\n
+\n
+
+---------------------------------------------------------------------------------------
+
+WAS UNABLE TO GET THE CROSS VALIDATION TO WORK
+
+```{r K fold-cross_validation, include= FALSE, echo=FALSE, eval=FALSE}
+
+fit_glm1
+modelParams <- made ~shot_dist*shooter+log(ndd+1)*defender
+crossV <- caret::trainControl(method="cv", number = 4, savePredictions = TRUE)
+modelOne <- caret::train(made ~shot_dist*shooter+log(ndd+1)*defender, data= train, method ="glmnet", trControl=crossV, linout=FALSE)
+print(modelOne)
+
+
+
+```
